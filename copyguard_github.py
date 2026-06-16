@@ -19,7 +19,7 @@ Bu sürüm OKX public market data kullanır.
 import os, json, time, math, urllib.request, urllib.parse, urllib.error
 from datetime import datetime, timezone, timedelta
 
-VERSION = "CopyGuard GitHub Actions OKX v3.1"
+VERSION = "CopyGuard GitHub Actions OKX v3.2"
 OKX_BASE = os.getenv("OKX_BASE_URL", "https://www.okx.com").rstrip("/")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -198,14 +198,27 @@ def ticker_map():
     out = {}
     for t in okx("/api/v5/market/tickers", {"instType": "SWAP"}):
         inst = t.get("instId")
-        if not inst or not inst.endswith("-USDT-SWAP"): continue
+        if not inst or not inst.endswith("-USDT-SWAP"):
+            continue
         last = sf(t.get("last"))
         open24h = sf(t.get("open24h"))
-        chg = ((last-open24h)/open24h*100) if open24h else 0.0
+        chg = ((last - open24h) / open24h * 100) if open24h else 0.0
+
+        # OKX SWAP tarafında volCcy24h çoğu üründe base coin miktarıdır.
+        # Hacim filtresini USDT karşılığına çevirmek için last fiyatla çarpıyoruz.
+        # Eski v3.1'de BTC/ETH/SOL/LINK gibi pahalı coinler bu yüzden yanlışlıkla eleniyordu.
+        base_vol = sf(t.get("volCcy24h"))
+        contract_vol = sf(t.get("vol24h"))
+        turnover_usdt = base_vol * last if base_vol and last else 0.0
+        if turnover_usdt <= 0 and contract_vol and last:
+            turnover_usdt = contract_vol * last
+
         out[inst] = {
             "inst": inst,
             "last": last,
-            "turnover": sf(t.get("volCcy24h")) or sf(t.get("vol24h")),
+            "turnover": turnover_usdt,
+            "raw_volCcy24h": base_vol,
+            "raw_vol24h": contract_vol,
             "change": chg,
         }
     return out
@@ -238,18 +251,40 @@ def open_interest(inst):
         return 0.0
     return 0.0
 
+def okx_available_from_our_list(active, tm):
+    found = []
+    missing = []
+    for b in BASES:
+        if b in BLACKLIST:
+            continue
+        inst = f"{b}-USDT-SWAP"
+        if (not active or inst in active) and inst in tm:
+            found.append(b)
+        else:
+            missing.append(b)
+    return found, missing
+
 def universe(active, tm):
     syms = []
+    skipped_low_volume = []
+    skipped_big_move = []
     for b in BASES:
-        if b in BLACKLIST: continue
+        if b in BLACKLIST:
+            continue
         inst = f"{b}-USDT-SWAP"
-        if active and inst not in active: continue
+        if active and inst not in active:
+            continue
         t = tm.get(inst)
-        if not t: continue
-        if t["turnover"] < MIN_24H_QUOTE_VOLUME: continue
-        if abs(t["change"]) > MAX_24H_CHANGE_PCT: continue
+        if not t:
+            continue
+        if t["turnover"] < MIN_24H_QUOTE_VOLUME:
+            skipped_low_volume.append(b)
+            continue
+        if abs(t["change"]) > MAX_24H_CHANGE_PCT:
+            skipped_big_move.append(b)
+            continue
         syms.append(inst)
-    return syms
+    return syms, skipped_low_volume, skipped_big_move
 
 def wick_bad(c):
     x = c[-1]
@@ -509,10 +544,18 @@ def scan():
     active = active_instruments()
     time.sleep(REQUEST_SLEEP_SECONDS)
     btc = btc_filter()
-    syms = universe(active, tm)
+    available_clean, missing_clean = okx_available_from_our_list(active, tm)
+    syms, skipped_low_volume, skipped_big_move = universe(active, tm)
     print(f"{len(syms)} coin taranacak | BTC strong={btc.get('strong')} weak={btc.get('weak')}")
     scanned_clean = [x.replace("-USDT-SWAP", "") for x in syms]
+    print("OKX'te listeden bulunanlar:", ", ".join(available_clean))
     print("Taranan coinler:", ", ".join(scanned_clean))
+    if skipped_low_volume:
+        print("Hacimden elenenler:", ", ".join(skipped_low_volume))
+    if skipped_big_move:
+        print("Aşırı hareketten elenenler:", ", ".join(skipped_big_move))
+    if missing_clean:
+        print("OKX USDT-SWAP tarafında bulunamayanlar:", ", ".join(missing_clean))
 
     cands = []
     for i,inst in enumerate(syms,1):
@@ -543,11 +586,19 @@ def scan():
             time.sleep(0.5)
     else:
         coin_line = ", ".join(scanned_clean[:60]) if scanned_clean else "Yok"
+        avail_line = ", ".join(available_clean[:80]) if available_clean else "Yok"
+        missing_line = ", ".join(missing_clean[:40]) if missing_clean else "Yok"
+        lowvol_line = ", ".join(skipped_low_volume[:50]) if skipped_low_volume else "Yok"
+        bigmove_line = ", ".join(skipped_big_move[:30]) if skipped_big_move else "Yok"
         msg = (
             f"ℹ️ <b>{VERSION}</b>\n"
             f"{tr_time()} | {len(syms)} coin tarandı.\n"
             f"Tarananlar: {coin_line}\n"
-            f"Hacim filtresi: {MIN_24H_QUOTE_VOLUME/1_000_000:.0f}M USDT\n"
+            f"OKX'te listemizden bulunanlar: {avail_line}\n"
+            f"OKX'te yok/aktif değil görünenler: {missing_line}\n"
+            f"Hacimden elenenler: {lowvol_line}\n"
+            f"Aşırı hareketten elenenler: {bigmove_line}\n"
+            f"Hacim filtresi: {MIN_24H_QUOTE_VOLUME/1_000_000:.0f}M USDT eşdeğeri eşdeğeri\n"
             f"Kalite eşiğini geçen yeni sinyal yok.\n"
             f"Bu mesaj sadece manuel testte veya SEND_NO_SIGNAL=true iken gönderilir."
         )
