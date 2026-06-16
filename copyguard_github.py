@@ -19,7 +19,7 @@ Bu sürüm OKX public market data kullanır.
 import os, json, time, math, urllib.request, urllib.parse, urllib.error
 from datetime import datetime, timezone, timedelta
 
-VERSION = "CopyGuard GitHub Actions OKX v3"
+VERSION = "CopyGuard GitHub Actions OKX v3.1"
 OKX_BASE = os.getenv("OKX_BASE_URL", "https://www.okx.com").rstrip("/")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -28,7 +28,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 ACCOUNT_CAPITAL_USDT = float(os.getenv("ACCOUNT_CAPITAL_USDT", "500"))
 POSITION_USDT_PER_SIGNAL = float(os.getenv("POSITION_USDT_PER_SIGNAL", "40"))
 
-MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "30000000"))
+MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "15000000"))
 MAX_24H_CHANGE_PCT = float(os.getenv("MAX_24H_CHANGE_PCT", "18"))
 MAX_SIGNALS_PER_RUN = int(os.getenv("MAX_SIGNALS_PER_RUN", "5"))
 
@@ -511,6 +511,8 @@ def scan():
     btc = btc_filter()
     syms = universe(active, tm)
     print(f"{len(syms)} coin taranacak | BTC strong={btc.get('strong')} weak={btc.get('weak')}")
+    scanned_clean = [x.replace("-USDT-SWAP", "") for x in syms]
+    print("Taranan coinler:", ", ".join(scanned_clean))
 
     cands = []
     for i,inst in enumerate(syms,1):
@@ -540,7 +542,15 @@ def scan():
             state_update(sig, st)
             time.sleep(0.5)
     else:
-        msg = f"ℹ️ <b>{VERSION}</b>\n{tr_time()} | {len(syms)} coin tarandı.\nKalite eşiğini geçen yeni sinyal yok.\nBu mesaj sadece manuel testte veya SEND_NO_SIGNAL=true iken gönderilir."
+        coin_line = ", ".join(scanned_clean[:60]) if scanned_clean else "Yok"
+        msg = (
+            f"ℹ️ <b>{VERSION}</b>\n"
+            f"{tr_time()} | {len(syms)} coin tarandı.\n"
+            f"Tarananlar: {coin_line}\n"
+            f"Hacim filtresi: {MIN_24H_QUOTE_VOLUME/1_000_000:.0f}M USDT\n"
+            f"Kalite eşiğini geçen yeni sinyal yok.\n"
+            f"Bu mesaj sadece manuel testte veya SEND_NO_SIGNAL=true iken gönderilir."
+        )
         print(msg)
         if SEND_NO_SIGNAL or manual:
             tg(msg)
