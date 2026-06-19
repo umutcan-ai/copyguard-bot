@@ -1,0 +1,60 @@
+name: CopyGuard Simulation Bot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  simulation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Restore simulation state
+        uses: actions/cache/restore@v4
+        with:
+          path: paper_state.json
+          key: copyguard-simulation-state-${{ github.run_id }}
+          restore-keys: |
+            copyguard-simulation-state-
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run CopyGuard Simulation Bot
+        env:
+          PAPER_TELEGRAM_BOT_TOKEN: ${{ secrets.PAPER_TELEGRAM_BOT_TOKEN }}
+          PAPER_TELEGRAM_CHAT_ID: ${{ secrets.PAPER_TELEGRAM_CHAT_ID }}
+          PAPER_START_EQUITY_USDT: "500"
+          PER_COIN_PLAN_RATIO: "0.50"
+          EXCEPTION_PLAN_RATIO: "0.25"
+          MIN_LONG_SCORE: "7.8"
+          MAX_OPEN_POSITIONS: "5"
+          EXCEPTION_MAX_POSITIONS: "6"
+          MAX_ORDER_COINS: "10"
+          CANCEL_EXTERNAL_ORDERS_AT_X: "2.5"
+          NORMAL_MAX_EXPOSURE_X: "3.0"
+          RESCUE_MAX_EXPOSURE_X: "3.5"
+          EMERGENCY_DCA_MAX_X: "4.0"
+          EXCEPTION_LONG_SCORE: "9.2"
+          REPLACE_SCORE_DELTA: "0.8"
+          REPRICE_STRONG_SCORE: "8.5"
+          PENDING_REVIEW_HOURS: "12"
+          REPRICE_COOLDOWN_MINUTES: "30"
+          MAX_UP_REPRICE_PER_DAY: "2"
+          SCAN_INTERVAL_MINUTES: "5"
+          MAX_NEW_POSITIONS_PER_SCAN: "3"
+          DAILY_REPORT_HOUR_TR: "23"
+          DAILY_REPORT_MINUTE_TR: "55"
+        run: python copyguard_simulation_bot.py
+      - name: Save simulation state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: paper_state.json
+          key: copyguard-simulation-state-${{ github.run_id }}
